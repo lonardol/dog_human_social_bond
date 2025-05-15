@@ -153,7 +153,39 @@ for (i in 1:nrow(all.res)) {
   )
   
   LP <- m.mat[, names(coefs)] %*% coefs # LP wrt fixed effects
-  
+ 
+  #LL added 
+  # add random intercept of subj
+  library(MASS)  # for mvrnorm
+
+# Number of subjects
+n.subj <- length(unique(xdata$subj.id))
+
+# Variance-covariance components
+intercept.var <- 0.36       # SD = 0.6
+slope.var <- 0.16           # SD = 0.4
+cor.is <- 0.2               # correlation between intercept & slope
+cov.is <- cor.is * sqrt(intercept.var) * sqrt(slope.var)
+
+# Create covariance matrix
+Sigma <- matrix(c(
+  intercept.var, cov.is,
+  cov.is,        slope.var
+), ncol = 2)
+
+# Simulate random effects
+re.mat <- MASS::mvrnorm(n = n.subj, mu = c(0, 0), Sigma = Sigma)
+
+# Extract subject-specific intercepts and slopes
+subj.int <- re.mat[, 1]
+subj.slope <- re.mat[, 2]
+
+# Add to the linear predictor
+cond <- model.matrix(~ condition, data = xdata)[, "conditiontest"]
+
+LP <- LP + subj.int[as.numeric(xdata$subj.id)] +
+          subj.slope[as.numeric(xdata$subj.id)] * cond
+
   
   phi = 10##precision parameter
   yvals = exp(LP) / (1 + exp(LP))#proportion
@@ -163,26 +195,47 @@ for (i in 1:nrow(all.res)) {
   prop.bc = rbeta(n = n,
                   shape1 = beta.par$shape1,
                   shape2 = beta.par$shape2)
+ prop.bc.scaled <- (prop.bc*(length(prop.bc) - 1) + 0.5)/length(prop.bc)#transform DV to exclude 0 and 1s
+
+  #LL:old code
+  # # fit full model:
+  # full <- keepWarnings(betareg(prop.bc ~ condition + sex + order,
+  #                              data = xdata))
+  # # fit null model:
+  # null <- keepWarnings(betareg(prop.bc ~ sex + order,
+  #                              data = xdata))
+   ##LL added
+  library(glmmTMB)
+# fit full model:
+full <- glmmTMB(
+  prop.bc.scaled ~ condition + sex + order + (1 | subj.id),
+  family = beta_family(),
+  data = xdata
+)
+# fit null model:
+null <- glmmTMB(
+  prop.bc.scaled ~ sex + order + (1 | subj.id),
+  family = beta_family(),
+  data = xdata
+)
   
-  # fit full model:
-  full <- keepWarnings(betareg(prop.bc ~ condition + sex + order,
-                               data = xdata))
-  # fit null model:
-  null <- keepWarnings(betareg(prop.bc ~ sex + order,
-                               data = xdata))
+coefs_full <- fixef(full)$cond
   
-  
-  # store results:
-  all.res[i, c("icpt", "conditiontest", "sexm", "ordertest_first", "phi")] <-
-    coef(full$value)
-  all.res[i, "warns.full"] <-
-    nchar(paste(full$warnings, collapse = ""))
-  all.res[i, "warns.null"] <-
-    nchar(paste(null$warnings, collapse = ""))
-  all.res[i, "lrt.p.con"] <-
-    as.data.frame(lrtest(full$value, null$value))[2, "Pr(>Chisq)"]
-  all.res[i, "full.null.p"] <-
-    as.data.frame(lrtest(full$value))[2, "Pr(>Chisq)"]
+  # Store results
+# Extract fixed effects
+coefs_full <- fixef(full)$cond
+
+# Store coefficients and dispersion (phi)
+all.res[i, c("icpt", "conditiontest", "sexm", "ordertest_first")] <- coefs_full
+all.res[i, "phi"] <- sigma(full)
+
+# Likelihood ratio test for effect of condition
+lrt.condition <- anova(full, null)
+all.res[i, "lrt.p.con"] <- lrt.condition$"Pr(>Chisq)"[2]
+
+# Track convergence
+all.res[i, "converged"] <- ifelse(isTRUE(all.equal(full$sdr$pdHess, TRUE)), 1, 0)
+
 }
 
 save.image("social_bond_exp2_power_sim_N64.RData")
@@ -199,27 +252,27 @@ save.image("social_bond_exp2_power_sim_N64.RData")
 ## Only models that converged are evaluated from here on:  
 
 ```{r include=FALSE}
-all.res2=subset(all.res, warns.full==0)
+# Filter for successfully converged models
+all.res2 <- all.res %>% filter(converged == 1) #all models converged
 ```
 
 
 ### How many models converged, have a significant full-null model comparison, and a significant LRT of condition?  
 ```{r echo=FALSE}
-n.converged<- all.res2%>%
-      summarise(n.converged=length(lrt.p.con))
+# Total number of converged models
+n.converged <- nrow(all.res)
 
 
 lrt.data2 <- all.res2 %>%
   filter(full.null.p<0.05)%>%
   group_by(test.per,control.per) %>%
-  summarise(lrt.p.con.median = median(lrt.p.con), 
+  summarise(lrt.p.con.median = median(lrt.p.con),
             lrt.p.fullnull.median = median(full.null.p),
             n.sign.lrt.con = length(lrt.p.con[lrt.p.con < 0.05]),
             n.sign.lrt.fullnull = length(full.null.p[full.null.p < 0.05]),
             n.lrt = n.simus,
             proportion.sign.lrt.con = length(lrt.p.con[lrt.p.con < 0.05]) / n.simus,
             proportion.sign.lrt.fullnull = length(full.null.p[full.null.p < 0.05]) / n.simus)
-
 lrt.data2
 ```
 #### Plotting the proportion of significant LRTs for the predictor variable condition ONLY based on models that converged and with a significant full-null model comparison
