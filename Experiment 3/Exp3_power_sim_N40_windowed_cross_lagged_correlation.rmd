@@ -1,0 +1,89 @@
+---
+title: "Exp. 3 - correlation - power"
+author: "Lucrezia Lonardo"
+date: "15/05/2025"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Windowed cross-lagged correlation
+```{r}
+library(tidyverse)
+```
+
+```{r}
+#with multiple trials per dyad
+library(parallel)
+
+set.seed(123)
+
+# Parameters
+n_sim <- 1000       # number of simulations
+#n_trials <- 2
+n_points <- 12      # total number of time points per individual
+window_size <- 5    # window size
+lag <- 1            # lag to test
+rho_lagged <- 0.2   # true lagged correlation
+alpha <- 0.05       # significanca level
+n_dyads <- 40
+n_cores <- detectCores() - 1  # Use all cores but one
+
+# Function to simulate one dyad's trial
+simulate_dyad_trial <- function(n, lag, rho) {
+  A <- rnorm(n)
+  B <- numeric(n)
+  for (t in (lag + 1):n) {
+    B[t] <- rho * A[t - lag] + sqrt(1 - rho^2) * rnorm(1)
+  }
+  data.frame(A = A, B = B)
+}
+
+# Function to compute cross-lagged correlations in windows
+windowed_clc_dyad <- function(df, window_size, lag) {
+  n_windows <- floor((nrow(df) - window_size) / lag)
+  corrs <- numeric(n_windows)
+  for (i in 1:n_windows) {
+    start <- (i - 1) * lag + 1
+    end <- start + window_size - 1
+    A_win <- df$A[start:(end - lag)]
+    B_win <- df$B[(start + lag):end]
+    corrs[i] <- cor(A_win, B_win)
+  }
+  return(corrs)
+}
+
+# Simulation function for one iteration
+simulate_one <- function(iter) {
+  all_corrs <- numeric(n_dyads)
+  for (d in 1:n_dyads) {
+    trial_data <- simulate_dyad_trial(n_points, lag, rho_lagged)
+    corrs <- windowed_clc_dyad(trial_data, window_size, lag)
+    all_corrs[d] <- mean(corrs, na.rm = TRUE)
+  }
+  p_val <- t.test(all_corrs)$p.value
+  return(p_val < alpha)
+}
+
+# Create cluster
+cl <- makeCluster(n_cores)
+clusterExport(cl, varlist = c("simulate_dyad_trial", "windowed_clc_dyad", "n_dyads", 
+                              "n_points", "lag", "rho_lagged", "window_size", "alpha"))
+clusterSetRNGStream(cl, 123)  # for reproducibility
+
+# Run simulations in parallel
+results <- parLapply(cl, 1:n_sim, simulate_one)
+
+stopCluster(cl)
+
+power <- mean(unlist(results))
+cat("Estimated power:", round(power, 3), "\n")
+
+
+
+```
+
+
+

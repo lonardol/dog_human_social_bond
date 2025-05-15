@@ -10,15 +10,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-#Pearson's correlation 
+#Simple Pearson's correlation 
 library(seqtest)
 size.cor(rho = 0, delta = 0.3,
          alternative = "two.sided",
          alpha = 0.05, beta = 0.2, output = TRUE)
 ```
-
-```{r}
-
-```
-
 
