@@ -1,0 +1,270 @@
+---
+title: "Study 1 - dog-human social bond - power simulation"
+author: "Lucrezia Lonardo"
+date: "14/05/2025"
+output: 
+  html_document:
+    theme: united
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(cowplot)
+library("gghalves")
+
+#load("dog_human_social_bond_exp1_power_sim_N36.RData")
+```
+
+## Generate data
+
+```{r echo=FALSE, include=FALSE}
+n.subject <- 36 # number subjects (currently ET-trained dogs)
+n.per.subject <- 8 # observations per subject
+n.per.condition <- 4 # observations per subject and condition
+subj.id <- as.factor(paste("subj", str_pad(1:n.subject, 2, pad = "0"), sep = "."))
+constricting.per <- c(-250) # performance in constricting condition
+dilating.per <- c(250) # performance in dilating condition
+```
+
+
+```{r echo=FALSE, include=FALSE}
+# Assign counterbalancing order
+# Even subjects get "constricting" first, odd get "dilating" first 
+cb_order <- ifelse(as.numeric(subj.id) %% 2 == 0, "constricting", "dilating")
+
+# Initialize empty data frame
+start.data <- data.frame()
+
+# Loop through each subject and create their trials
+for (i in seq_along(subj.id)) {
+  subj <- subj.id[i]
+  first_cond <- cb_order[i]
+  second_cond <- ifelse(first_cond == "constricting", "dilating", "constricting")
+  
+  conditions <- c(rep(first_cond, n.per.condition), rep(second_cond, n.per.condition))
+  
+  subj_data <- data.frame(
+    subj.id = subj,
+    condition = conditions,
+    trial = 1:(2 * n.per.condition)
+  )
+  
+  start.data <- rbind(start.data, subj_data)
+}
+
+# add order
+start.data$order <- as.factor(rep(x = c("dilating_first", "constricting_first"), times = n.subject / 2))[as.numeric(start.data$subj.id)]
+
+start.data$order2 <- ifelse((start.data$order == "dilating_first" & start.data$condition == "dilating") |
+  (start.data$order == "constricting_first" & start.data$condition == "constricting"), 1, 2)
+
+
+# add demographics 
+start.data$sex <- as.factor(rep(x = c("f", "m", "m", "f"), times = n.subject/4))[as.numeric(start.data$subj.id)]
+
+
+# z-transformation of covariates
+start.data$z.order <- as.vector(scale(as.numeric(start.data$order2)))
+```
+
+# Data checks:
+
+```{r echo=FALSE, include=FALSE}
+# does each subject have only one sex and age?
+xx <- table(start.data$subj.id, start.data$sex)
+range(apply(X = xx > 0, MARGIN = 1, sum)) # should be 1 and 1
+
+xx <- table(start.data$order, start.data$sex)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$subj.id, start.data$condition)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$condition, start.data$order)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+
+xx <- table(start.data$subj.id, start.data$order)
+range(apply(X = xx > 0, MARGIN = 1, sum))
+```
+
+
+## Simulation
+
+Test
+```{r eval=FALSE, include=FALSE}
+n.simus <- 1000 # small number for testing
+resid.sd <- 350#residual standard deviation
+subj.sd <- 500#random effect of individual
+
+icpt <- constricting.per#intercept
+sex.effect <- 0
+order.effect <- 0
+
+xdata<-start.data
+tot.n <- nrow(xdata)#total n
+m.mat <- model.matrix(object=~condition+sex+order, data=xdata)
+coefs <- c("(Intercept)"=icpt, "conditiondilating"=dilating.per,  "sexm"=sex.effect, "orderdilating_first"=order.effect)
+
+rv <- m.mat[, names(coefs)]%*%coefs+#fixed effects
+rnorm(n=n.subject, sd=subj.sd)[as.numeric(subj.id)]+#random effect of subj.
+rnorm(n=tot.n, sd=resid.sd)#residual variation
+
+xdata$condition <- factor(xdata$condition)
+
+#plotting
+par(mar=c(2.7, 2.7, 0.2, 0.2), mgp=c(1.5, 0.3, 0),
+tcl=-0.15, las=1, cex.lab=0.7, cex.axis=0.5)
+plot(xdata$condition, rv)
+
+library(lme4)
+full=lmer(rv~condition+sex+order+(1|subj.id), data=xdata, REML=F)
+summary(full)
+drop1(full, test="Chisq")
+```
+
+Actual simulation
+```{r eval=FALSE, include=FALSE}
+n.simus <- 1000 
+tot.n <- nrow(xdata)#total n
+resid.sd <- 350#residual standard deviation
+subj.sd <- 500#random effect of individual
+
+icpt <- constricting.per#intercept
+sex.effect <- 0
+order.effect <- 0
+
+# create object to store the simulation parameters and results:
+all.res <- data.frame(expand.grid(
+  n.subject = n.subject, r.effect = subj.sd, resid.sd=resid.sd, 
+  dilating.per = dilating.per, constricting.per = constricting.per,
+  simu = 1:n.simus
+))
+all.res$icpt <- NA
+all.res$conditiondilating <- NA
+all.res$re.sd <- NA
+all.res$warns.full <- NA
+all.res$lrt.p.con <- NA
+all.res$lrt.p.con <- NA
+all.res$lrt.p.sex <- NA
+all.res$lrt.p.order <- NA
+
+all.ests <- matrix(NA, nrow=n.simus, ncol=1)
+colnames(all.ests)=c("lrt.p.con")
+
+# create data frame with design:
+## done above
+
+# load packages needed:
+library(lme4)
+# Loading required package: Matrix
+library(kyotil) # we want to store info about convergence issues
+
+# define control structure to make convergence more likely:
+contr <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 10000))
+
+xdata <- start.data
+```
+
+
+```{r eval=FALSE, include=FALSE}
+# run simulation
+for (i in 1:nrow(all.res)) {
+  set.seed(i) # allows to later replicate individual simulations
+  
+  m.mat <-
+    model.matrix(object = ~ condition + sex + order, data = xdata) # create model martix
+  
+  coefs <- c(
+    "(Intercept)" = constricting.per,
+    "conditiondilating" = dilating.per,
+    "sexm" = 0,
+    "orderdilating_first" = 0
+  )
+  # generate response:
+  xdata$rv <- m.mat[, names(coefs)] %*% coefs + #fixed effects
+    rnorm(n = n.subject, sd = subj.sd)[as.numeric(subj.id)] + #random effect of subj.
+    rnorm(n = tot.n, sd = resid.sd)#residual variation
+  
+  # fit full model:
+  full <-
+    keepWarnings(lmer(
+      rv ~ condition + sex +  order + (1 | subj.id),
+      data = xdata,
+      REML = FALSE,
+      control = contr
+    ))
+
+  # store results:
+  all.res[i, c("(Intercept)",
+               "conditiondilating",
+               "sexm",
+               "orderdilating_first")] <- fixef(full$value)
+  all.res[i, "re.sd"] <-
+    as.data.frame(summary(full$value)$varcor)[1, "sdcor"]
+  all.res[i, "warns.full"] <-
+    nchar(paste(full$warnings, collapse = ""))
+  all.res[i, "lrt.p.con"] <-
+    as.data.frame(drop1(full$value, test = "Chisq"))["condition", "Pr(Chi)"]
+   all.res[i, "lrt.p.sex"] <-
+    as.data.frame(drop1(full$value, test = "Chisq"))["sex", "Pr(Chi)"]
+    all.res[i, "lrt.p.order"] <-
+    as.data.frame(drop1(full$value, test = "Chisq"))["order", "Pr(Chi)"]
+}
+
+save.image("dog_human_social_bond_exp1_power_sim_N36.RData")
+```
+
+## Evaluation of results 
+
+* number of warning per combinations of random effects (out of 1000 models per cell)  
+Full model:  
+```{r echo=FALSE}
+#full model
+tapply(X=all.res[, "warns.full"]>0, INDEX=all.res[, c("constricting.per", "dilating.per")],
+FUN=sum)
+#warning codes: 
+#Warning: convergence code 3 from bobyqa: bobyqa -- a trust region step failed to reduce qWarning: convergence code 3 from bobyqa: bobyqa -- a trust region step failed to reduce qWarning: convergence code 3 from bobyqa: bobyqa -- a trust region step failed to reduce qboundary (singular) fit: see help('isSingular')
+```
+
+* plotting the estimates (all models)
+
+```{r echo=FALSE}
+par(mar=c(3, 3, 0.2, 0.2), mgp=c(1.7, 0.3, 0), tcl=-0.15, las=1)
+plot(
+  x = as.numeric(as.factor(rep(
+    x = c("(Intercept)", "conditiondilating", "re.sd"),
+    each = nrow(all.res)
+  ))),
+  y = unlist(all.res[, c("(Intercept)", "conditiondilating", "re.sd")]),
+  pch = 19, col = grey(level = 0.2, alpha = 0.2),
+  xaxt = "n", xlim = c(0.5, 3.5), ylab = "estimate", xlab = ""
+)
+mtext(text = c("(Intercept)", "conditiondilating", "re.sd"), side = 1, at = 1:3, line = 0.2)
+```
+
+## Only models that converged are evaluated from here on:  
+
+```{r include=FALSE}
+all.res2=subset(all.res, warns.full==0)
+```
+
+
+### How many models converged, have a significant full-null model comparison, and a significant LRT of condition?  
+```{r echo=FALSE}
+
+lrt.data2 <- all.res2 %>%
+  group_by(dilating.per, constricting.per) %>%
+  summarise(lrt.p.con.mean2 = mean(lrt.p.con), 
+            n.sign.lrt2 = length(lrt.p.con[lrt.p.con < 0.05]), 
+            n.lrt = n.simus,#length(lrt.p.con), 
+            proportion.sign.lrt2.condition = length(lrt.p.con[lrt.p.con < 0.05]) / n.simus,
+            proportion.sign.lrt2.sex = length(lrt.p.con[lrt.p.sex < 0.05]) / n.simus)
+
+lrt.data2
+```
+
+
