@@ -246,7 +246,7 @@ all.res2 <- all.res %>% filter(converged == 1) #all models converged
 ### How many models converged, have a significant full-null model comparison, and a significant LRT of condition?  
 ```{r echo=FALSE}
 # Total number of converged models
-n.converged <- nrow(all.res)
+n.converged <- nrow(all.res2)
 
 
 lrt.data2 <- all.res2 %>%
